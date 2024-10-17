@@ -11,6 +11,7 @@ import { timestamp2string, renderQuota } from 'utils/common';
 import Label from 'ui-component/Label';
 import { useLogType } from '../type/LogType';
 import { useTranslation } from 'react-i18next';
+import ContentCell from './ContentCell';
 
 function renderType(type, logTypes) {
   const typeOption = logTypes[type];
@@ -431,16 +432,18 @@ function viewLogContent(item, t, totalInputTokens, totalOutputTokens) {
   return (
     <Tooltip title={tips} placement="top" arrow>
       <Stack direction="column" spacing={0.3}>
-        {inputPriceInfo && (
-          <Label color="info" variant="soft">
-            {inputPriceInfo}
-          </Label>
-        )}
-        {outputPriceInfo && (
-          <Label color="info" variant="soft">
-            {outputPriceInfo}
-          </Label>
-        )}
+        <ContentCell content={item.content}>
+          {inputPriceInfo && (
+            <Label color="info" variant="soft">
+              {inputPriceInfo}
+            </Label>
+          )}
+          {outputPriceInfo && (
+            <Label color="info" variant="soft">
+              {outputPriceInfo}
+            </Label>
+          )}
+        </ContentCell>
       </Stack>
     </Tooltip>
   );
