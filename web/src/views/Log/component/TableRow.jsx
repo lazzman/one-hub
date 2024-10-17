@@ -5,12 +5,13 @@ import Decimal from 'decimal.js';
 import { styled } from '@mui/material/styles';
 import Badge from '@mui/material/Badge';
 
-import { TableRow, TableCell, Stack, Tooltip, Typography } from '@mui/material';
+import { TableRow, TableCell, Stack, Tooltip, Typography, Divider } from '@mui/material';
 
 import { timestamp2string, renderQuota } from 'utils/common';
 import Label from 'ui-component/Label';
 import LogType from '../type/LogType';
 import { useTranslation } from 'react-i18next';
+import ContentCell from './ContentCell';
 
 function renderType(type) {
   const typeOption = LogType[type];
@@ -369,20 +370,24 @@ function viewLogContent(item, t, totalInputTokens, totalOutputTokens) {
   );
 
   return (
-    <Tooltip title={tips} placement="top" arrow>
-      <Stack direction="column" spacing={0.3}>
-        {inputPriceInfo && (
-          <Label color="info" variant="soft">
-            {inputPriceInfo}
-          </Label>
-        )}
-        {outputPriceInfo && (
-          <Label color="info" variant="soft">
-            {outputPriceInfo}
-          </Label>
-        )}
-      </Stack>
-    </Tooltip>
+    <>
+      <Tooltip title={tips} placement="top" arrow>
+        <Stack direction="column" spacing={0.3}>
+          {inputPriceInfo && (
+            <Label color="info" variant="soft">
+              {inputPriceInfo}
+            </Label>
+          )}
+          {outputPriceInfo && (
+            <Label color="info" variant="soft">
+              {outputPriceInfo}
+            </Label>
+          )}
+        </Stack>
+      </Tooltip>
+      <Divider>-</Divider>
+      <ContentCell content={item.content} />
+    </>
   );
 }
 
