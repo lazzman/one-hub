@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"one-api/common"
 	"one-api/common/config"
+	"one-api/common/hijack"
 	"one-api/common/logger"
 	"one-api/model"
 	"one-api/types"
@@ -158,6 +159,9 @@ func (q *Quota) completedQuotaConsumption(usage *types.Usage, tokenName string, 
 		model.UpdateChannelUsedQuota(q.channelId, quota)
 	}
 
+	logContent := ""
+	logContent = hijack.AppendResponseToLogContent(ctx, logContent)
+
 	model.RecordConsumeLog(
 		ctx,
 		q.userId,
@@ -167,7 +171,7 @@ func (q *Quota) completedQuotaConsumption(usage *types.Usage, tokenName string, 
 		q.modelName,
 		tokenName,
 		quota,
-		"",
+		logContent,
 		q.getRequestTime(),
 		isStream,
 		q.GetLogMeta(usage),
