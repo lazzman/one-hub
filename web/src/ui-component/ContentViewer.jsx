@@ -4,6 +4,12 @@ import { marked } from 'marked';
 import { Box, Paper, Typography, CircularProgress } from '@mui/material';
 import 'assets/css/content-viewer.css';
 
+// 配置 marked 选项，启用换行符支持
+marked.setOptions({
+  breaks: true, // 将单个换行符 \n 渲染为 <br>
+  gfm: true     // 启用 GitHub Flavored Markdown
+});
+
 /**
  * ContentViewer component for displaying Markdown or HTML content
  * 

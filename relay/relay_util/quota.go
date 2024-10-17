@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"one-api/common"
 	"one-api/common/config"
+	"one-api/common/hijack"
 	"one-api/common/logger"
 	"one-api/model"
 	"one-api/types"
@@ -167,7 +168,7 @@ func (q *Quota) completedQuotaConsumption(usage *types.Usage, tokenName string, 
 		q.modelName,
 		tokenName,
 		quota,
-		"",
+		hijack.AppendResponseToLogContent(ctx),
 		q.getRequestTime(),
 		isStream,
 		q.GetLogMeta(usage),
