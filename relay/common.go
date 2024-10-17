@@ -17,6 +17,7 @@ import (
 	"one-api/model"
 	"one-api/providers"
 	providersBase "one-api/providers/base"
+	"one-api/relay/relay_util"
 	"one-api/types"
 	"regexp"
 	"strings"
@@ -160,6 +161,9 @@ func responseJsonClient(c *gin.Context, data interface{}) *types.OpenAIErrorWith
 		return common.ErrorWrapperLocal(err, "write_response_body_failed", http.StatusInternalServerError)
 	}
 
+	// 存储完整响应到上下文
+	relay_util.StoreFullResponse(c.Request.Context(), relay_util.ResponseTypeJSON, string(responseBody))
+
 	return nil
 }
 
@@ -172,6 +176,7 @@ func responseStreamClient(c *gin.Context, stream requester.StreamReaderInterface
 	// 创建一个done channel用于通知处理完成
 	done := make(chan struct{})
 	var finalErr *types.OpenAIErrorWithStatusCode
+	var responseBuilder strings.Builder
 
 	defer stream.Close()
 
@@ -203,6 +208,7 @@ func responseStreamClient(c *gin.Context, stream requester.StreamReaderInterface
 					c.Writer.Write([]byte(streamData))
 					c.Writer.Flush()
 				}
+				responseBuilder.WriteString(data)
 
 			case err := <-errChan:
 				if !errors.Is(err, io.EOF) {
@@ -232,6 +238,7 @@ func responseStreamClient(c *gin.Context, stream requester.StreamReaderInterface
 								c.Writer.Write([]byte("data: " + streamData + "\n\n"))
 								c.Writer.Flush()
 							}
+							responseBuilder.WriteString(streamData)
 						}
 					}
 
@@ -252,6 +259,8 @@ func responseStreamClient(c *gin.Context, stream requester.StreamReaderInterface
 
 	// 等待处理完成
 	<-done
+	// 在stream处理完成后存储完整响应
+	relay_util.StoreFullResponse(c.Request.Context(), relay_util.ResponseTypeStream, responseBuilder.String())
 	return firstResponseTime, nil
 }
 
@@ -262,6 +271,7 @@ func responseGeneralStreamClient(c *gin.Context, stream requester.StreamReaderIn
 	// 创建一个done channel用于通知处理完成
 	done := make(chan struct{})
 	// var finalErr *types.OpenAIErrorWithStatusCode
+	var responseBuilder strings.Builder
 
 	defer stream.Close()
 	var isFirstResponse bool
@@ -289,6 +299,7 @@ func responseGeneralStreamClient(c *gin.Context, stream requester.StreamReaderIn
 					fmt.Fprint(c.Writer, data)
 					c.Writer.Flush()
 				}
+				responseBuilder.WriteString(data) // 累积完整响应
 
 			case err := <-errChan:
 				if !errors.Is(err, io.EOF) {
@@ -316,6 +327,7 @@ func responseGeneralStreamClient(c *gin.Context, stream requester.StreamReaderIn
 								fmt.Fprint(c.Writer, streamData)
 								c.Writer.Flush()
 							}
+							responseBuilder.WriteString(streamData) // 累积完整响应
 						}
 					}
 				}
@@ -326,6 +338,8 @@ func responseGeneralStreamClient(c *gin.Context, stream requester.StreamReaderIn
 
 	// 等待处理完成
 	<-done
+	// 存储完整响应到上下文
+	relay_util.StoreFullResponse(c.Request.Context(), relay_util.ResponseTypeStream, responseBuilder.String())
 
 	return firstResponseTime
 }
@@ -333,13 +347,22 @@ func responseGeneralStreamClient(c *gin.Context, stream requester.StreamReaderIn
 func responseMultipart(c *gin.Context, resp *http.Response) *types.OpenAIErrorWithStatusCode {
 	defer resp.Body.Close()
 
+	// 复制响应体
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return common.ErrorWrapper(err, "read_response_body_failed", http.StatusInternalServerError)
+	}
+
+	// 存储完整响应到上下文
+	relay_util.StoreFullResponse(c.Request.Context(), relay_util.ResponseTypeMultipart, bodyBytes)
+
 	for k, v := range resp.Header {
 		c.Writer.Header().Set(k, v[0])
 	}
 
 	c.Writer.WriteHeader(resp.StatusCode)
 
-	_, err := io.Copy(c.Writer, resp.Body)
+	_, err = c.Writer.Write(bodyBytes)
 	if err != nil {
 		return common.ErrorWrapper(err, "write_response_body_failed", http.StatusInternalServerError)
 	}
@@ -348,6 +371,9 @@ func responseMultipart(c *gin.Context, resp *http.Response) *types.OpenAIErrorWi
 }
 
 func responseCustom(c *gin.Context, response *types.AudioResponseWrapper) *types.OpenAIErrorWithStatusCode {
+	// 存储完整响应到上下文
+	relay_util.StoreFullResponse(c.Request.Context(), relay_util.ResponseTypeCustom, response)
+
 	for k, v := range response.Headers {
 		c.Writer.Header().Set(k, v)
 	}
