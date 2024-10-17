@@ -9,6 +9,7 @@ import { timestamp2string, renderQuota } from 'utils/common';
 import Label from 'ui-component/Label';
 import LogType from '../type/LogType';
 import { useTranslation } from 'react-i18next';
+import ContentCell from './ContentCell';
 
 function renderType(type) {
   const typeOption = LogType[type];
@@ -112,7 +113,7 @@ export default function LogTableRow({ item, userIsAdmin, userGroup }) {
         <TableCell>{viewInput(item, t)}</TableCell>
         <TableCell>{item.completion_tokens || ''}</TableCell>
         <TableCell>{item.quota ? renderQuota(item.quota, 6) : '$0'}</TableCell>
-        <TableCell>{item.content}</TableCell>
+        <ContentCell content={item.content} />
       </TableRow>
     </>
   );
