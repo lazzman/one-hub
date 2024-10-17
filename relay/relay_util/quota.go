@@ -146,6 +146,9 @@ func (q *Quota) completedQuotaConsumption(usage *types.Usage, tokenName string, 
 		model.UpdateChannelUsedQuota(q.channelId, quota)
 	}
 
+	logContent := q.getLogContent()
+	logContent = AppendResponseToLogContent(ctx, logContent)
+
 	model.RecordConsumeLog(
 		ctx,
 		q.userId,
@@ -155,7 +158,7 @@ func (q *Quota) completedQuotaConsumption(usage *types.Usage, tokenName string, 
 		q.modelName,
 		tokenName,
 		quota,
-		q.getLogContent(),
+		logContent,
 		getRequestTime(ctx),
 		isStream,
 		q.GetLogMeta(usage),
@@ -180,6 +183,15 @@ func (q *Quota) Undo(c *gin.Context) {
 
 func (q *Quota) Consume(c *gin.Context, usage *types.Usage, isStream bool) {
 	tokenName := c.GetString("token_name")
+
+	// 获取请求体
+	requestBody, _ := c.GetRawData()
+
+	// 存储请求体
+	StoreRequestBody(c.Request.Context(), string(requestBody))
+	// 存储客户端IP
+	StoreRequestClientIP(c.Request.Context(), c.ClientIP())
+
 	// 如果没有报错，则消费配额
 	go func(ctx context.Context) {
 		err := q.completedQuotaConsumption(usage, tokenName, isStream, ctx)
