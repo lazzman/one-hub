@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"one-api/common/config"
+	"one-api/common/hijack"
 	"one-api/common/logger"
 	"one-api/types"
 	"strings"
@@ -23,6 +24,11 @@ func UnmarshalBodyReusable(c *gin.Context, v any) error {
 		return err
 	}
 	c.Set(config.GinRequestBodyKey, requestBody)
+
+	// 存储请求体到上下文中，供后续使用
+	hijack.StoreRequestBody(c.Request.Context(), string(requestBody))
+	// 存储客户端IP
+	hijack.StoreRequestClientIP(c.Request.Context(), c.ClientIP())
 
 	c.Request.Body = io.NopCloser(bytes.NewBuffer(requestBody))
 	err = c.ShouldBind(v)
