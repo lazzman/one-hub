@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"one-api/common"
 	"one-api/common/config"
+	"one-api/common/hijack"
 	"one-api/common/logger"
 	"one-api/common/requester"
 	"one-api/common/utils"
@@ -281,6 +282,9 @@ func responseJsonClient(c *gin.Context, data interface{}) *types.OpenAIErrorWith
 		logger.LogError(c.Request.Context(), "write_response_body_failed:"+err.Error())
 	}
 
+	// 存储完整响应到上下文
+	hijack.StoreFullResponse(c.Request.Context(), hijack.ResponseTypeJSON, string(responseBody))
+
 	return nil
 }
 
@@ -293,6 +297,7 @@ func responseStreamClient(c *gin.Context, stream requester.StreamReaderInterface
 	// 创建一个done channel用于通知处理完成
 	done := make(chan struct{})
 	var finalErr *types.OpenAIErrorWithStatusCode
+	var responseBuilder strings.Builder
 
 	defer stream.Close()
 
@@ -324,6 +329,7 @@ func responseStreamClient(c *gin.Context, stream requester.StreamReaderInterface
 					c.Writer.Write([]byte(streamData))
 					c.Writer.Flush()
 				}
+				responseBuilder.WriteString(streamData)
 
 			case err := <-errChan:
 				if !errors.Is(err, io.EOF) {
@@ -337,22 +343,26 @@ func responseStreamClient(c *gin.Context, stream requester.StreamReaderInterface
 						c.Writer.Write([]byte(errMsg))
 						c.Writer.Flush()
 					}
+					responseBuilder.WriteString(errMsg)
 
 					finalErr = common.StringErrorWrapper(err.Error(), "stream_error", 900)
 					logger.LogError(c.Request.Context(), "Stream err:"+err.Error())
 				} else {
-					// 正常结束，处理endHandler
+					// 正常结束，处理 endHandler
 					if finalErr == nil && endHandler != nil {
 						streamData := endHandler()
 						if streamData != "" {
+							formattedData := "data: " + streamData + "\n\n"
 							select {
 							case <-c.Request.Context().Done():
 								// 客户端已断开，不执行任何操作，直接跳过
 							default:
 								// 客户端正常，发送数据
-								c.Writer.Write([]byte("data: " + streamData + "\n\n"))
+								c.Writer.Write([]byte(formattedData))
 								c.Writer.Flush()
 							}
+							// 将 endHandler 补发的数据追加到 responseBuilder，确保日志保留完整输出原文
+							responseBuilder.WriteString(formattedData)
 						}
 					}
 
@@ -365,6 +375,7 @@ func responseStreamClient(c *gin.Context, stream requester.StreamReaderInterface
 						c.Writer.Write([]byte(streamData))
 						c.Writer.Flush()
 					}
+					responseBuilder.WriteString(streamData)
 				}
 				return
 			}
@@ -373,6 +384,8 @@ func responseStreamClient(c *gin.Context, stream requester.StreamReaderInterface
 
 	// 等待处理完成
 	<-done
+	// 在stream处理完成后存储完整响应
+	hijack.StoreFullResponse(c.Request.Context(), hijack.ResponseTypeStream, responseBuilder.String())
 	return firstResponseTime, nil
 }
 
@@ -383,6 +396,7 @@ func responseGeneralStreamClient(c *gin.Context, stream requester.StreamReaderIn
 	// 创建一个done channel用于通知处理完成
 	done := make(chan struct{})
 	// var finalErr *types.OpenAIErrorWithStatusCode
+	var responseBuilder strings.Builder
 
 	defer stream.Close()
 	var isFirstResponse bool
@@ -410,6 +424,7 @@ func responseGeneralStreamClient(c *gin.Context, stream requester.StreamReaderIn
 					fmt.Fprint(c.Writer, data)
 					c.Writer.Flush()
 				}
+				responseBuilder.WriteString(data) // 累积完整响应
 
 			case err := <-errChan:
 				if !errors.Is(err, io.EOF) {
@@ -422,10 +437,11 @@ func responseGeneralStreamClient(c *gin.Context, stream requester.StreamReaderIn
 						fmt.Fprint(c.Writer, err.Error())
 						c.Writer.Flush()
 					}
+					responseBuilder.WriteString(err.Error())
 
 					logger.LogError(c.Request.Context(), "Stream err:"+err.Error())
 				} else {
-					// 正常结束，处理endHandler
+					// 正常结束，处理 endHandler
 					if endHandler != nil {
 						streamData := endHandler()
 						if streamData != "" {
@@ -437,6 +453,8 @@ func responseGeneralStreamClient(c *gin.Context, stream requester.StreamReaderIn
 								fmt.Fprint(c.Writer, streamData)
 								c.Writer.Flush()
 							}
+							// 将 endHandler 补发的数据追加到 responseBuilder，确保日志保留完整输出原文
+							responseBuilder.WriteString(streamData)
 						}
 					}
 				}
@@ -447,6 +465,8 @@ func responseGeneralStreamClient(c *gin.Context, stream requester.StreamReaderIn
 
 	// 等待处理完成
 	<-done
+	// 存储完整响应到上下文
+	hijack.StoreFullResponse(c.Request.Context(), hijack.ResponseTypeStream, responseBuilder.String())
 
 	return firstResponseTime
 }
@@ -454,13 +474,22 @@ func responseGeneralStreamClient(c *gin.Context, stream requester.StreamReaderIn
 func responseMultipart(c *gin.Context, resp *http.Response) *types.OpenAIErrorWithStatusCode {
 	defer resp.Body.Close()
 
+	// 复制响应体
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return common.ErrorWrapper(err, "read_response_body_failed", http.StatusInternalServerError)
+	}
+
+	// 存储完整响应到上下文
+	hijack.StoreFullResponse(c.Request.Context(), hijack.ResponseTypeMultipart, bodyBytes)
+
 	for k, v := range resp.Header {
 		c.Writer.Header().Set(k, v[0])
 	}
 
 	c.Writer.WriteHeader(resp.StatusCode)
 
-	_, err := io.Copy(c.Writer, resp.Body)
+	_, err = c.Writer.Write(bodyBytes)
 	if err != nil {
 		return common.ErrorWrapper(err, "write_response_body_failed", http.StatusInternalServerError)
 	}
@@ -469,6 +498,9 @@ func responseMultipart(c *gin.Context, resp *http.Response) *types.OpenAIErrorWi
 }
 
 func responseCustom(c *gin.Context, response *types.AudioResponseWrapper) *types.OpenAIErrorWithStatusCode {
+	// 存储完整响应到上下文（原始响应体）
+	hijack.StoreFullResponse(c.Request.Context(), hijack.ResponseTypeCustom, response.Body)
+
 	for k, v := range response.Headers {
 		c.Writer.Header().Set(k, v)
 	}
