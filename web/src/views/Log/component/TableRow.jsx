@@ -15,6 +15,8 @@ import QuotaWithDetailContent from './QuotaWithDetailContent';
 import { calculatePrice } from './QuotaWithDetailContent';
 import { styled } from '@mui/material/styles';
 
+import ContentCell from './ContentCell';
+
 function renderType(type, logTypes, t) {
   const typeOption = logTypes[type];
   if (typeOption) {
@@ -437,16 +439,18 @@ function viewLogContent(item, t) {
 
   return (
     <Stack direction="column" spacing={0.3}>
-      {inputPriceInfo && (
-        <Label color="info" variant="soft">
-          {inputPriceInfo}
-        </Label>
-      )}
-      {outputPriceInfo && (
-        <Label color="info" variant="soft">
-          {outputPriceInfo}
-        </Label>
-      )}
+      <ContentCell content={item.content}>
+          {inputPriceInfo && (
+            <Label color="info" variant="soft">
+              {inputPriceInfo}
+            </Label>
+          )}
+          {outputPriceInfo && (
+            <Label color="info" variant="soft">
+              {outputPriceInfo}
+            </Label>
+          )}
+      </ContentCell>
     </Stack>
   );
 }
