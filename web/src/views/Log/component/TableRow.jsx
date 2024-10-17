@@ -15,6 +15,8 @@ import QuotaWithDetailContent from './QuotaWithDetailContent';
 import { calculatePrice } from './QuotaWithDetailContent';
 import { styled } from '@mui/material/styles';
 
+import ContentCell from './ContentCell';
+
 function renderType(type, logTypes, t) {
   const typeOption = logTypes[type];
   if (typeOption) {
@@ -64,7 +66,7 @@ function requestTSLabelOptions(request_ts) {
   return color;
 }
 
-export default function LogTableRow({ item, userIsAdmin, userGroup, columnVisibility }) {
+export default function LogTableRow({ item, userIsAdmin, userGroup, columnVisibility, onOpenContent }) {
   const { t } = useTranslation();
   const LogType = useLogType();
   let request_time = item.request_time / 1000;
@@ -172,9 +174,7 @@ export default function LogTableRow({ item, userIsAdmin, userGroup, columnVisibi
           </TableCell>
         )}
         {columnVisibility.source_ip && <TableCell sx={{ p: '10px 8px' }}>{item.source_ip || ''}</TableCell>}
-        {columnVisibility.detail && (
-          <TableCell sx={{ p: '10px 8px' }}>{viewLogContent(item, t, totalInputTokens, totalOutputTokens)}</TableCell>
-        )}
+        {columnVisibility.detail && <TableCell sx={{ p: '10px 8px' }}>{viewLogContent(item, t, onOpenContent)}</TableCell>}
       </TableRow>
       {/* 展开行 */}
       {showExpand && (
@@ -200,7 +200,8 @@ LogTableRow.propTypes = {
   item: PropTypes.object,
   userIsAdmin: PropTypes.bool,
   userGroup: PropTypes.object,
-  columnVisibility: PropTypes.object
+  columnVisibility: PropTypes.object,
+  onOpenContent: PropTypes.func
 };
 
 function viewModelName(model_name, isStream) {
@@ -389,9 +390,7 @@ function calculateTokens(item) {
   };
 }
 
-function viewLogContent(item, t) {
-  // totalOutputTokens is passed but not used in this function
-  // Check if we have the necessary data to calculate prices
+function viewLogContent(item, t, onOpenContent) {
   if (!item?.metadata?.input_ratio) {
     const free = (item.quota === 0 || item.quota === undefined) && item.type === 2;
     return free ? (
@@ -435,16 +434,18 @@ function viewLogContent(item, t) {
 
   return (
     <Stack direction="column" spacing={0.3}>
-      {inputPriceInfo && (
-        <Label color="info" variant="soft">
-          {inputPriceInfo}
-        </Label>
-      )}
-      {outputPriceInfo && (
-        <Label color="info" variant="soft">
-          {outputPriceInfo}
-        </Label>
-      )}
+      <ContentCell content={item.content} onOpen={onOpenContent}>
+        {inputPriceInfo && (
+          <Label color="info" variant="soft">
+            {inputPriceInfo}
+          </Label>
+        )}
+        {outputPriceInfo && (
+          <Label color="info" variant="soft">
+            {outputPriceInfo}
+          </Label>
+        )}
+      </ContentCell>
     </Stack>
   );
 }

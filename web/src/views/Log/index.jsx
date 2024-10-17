@@ -25,6 +25,13 @@ import useMediaQuery from '@mui/material/useMediaQuery';
 import { useTheme } from '@mui/material/styles';
 import { useSelector } from 'react-redux';
 import { useLogType } from './type/LogType';
+import LogContentDrawer from './component/LogContentDrawer';
+import {
+  createInitialLogDrawerState,
+  openLogDrawerState,
+  closeLogDrawerState,
+  unmountLogDrawerState
+} from './component/logContentDrawerState';
 
 export default function Log() {
   const { t } = useTranslation();
@@ -55,6 +62,7 @@ export default function Log() {
   const matchUpMd = useMediaQuery(theme.breakpoints.up('sm'));
 
   const [logs, setLogs] = useState([]);
+  const [drawerState, setDrawerState] = useState(() => createInitialLogDrawerState());
   const userIsAdmin = useIsAdmin();
 
   // 添加列显示设置相关状态
@@ -185,6 +193,18 @@ export default function Log() {
     setSearchKeyword(originalKeyword);
     setRefreshFlag(!refreshFlag);
   };
+
+  const handleOpenContent = useCallback((content) => {
+    setDrawerState((currentState) => openLogDrawerState(currentState, content));
+  }, []);
+
+  const handleCloseContent = useCallback(() => {
+    setDrawerState((currentState) => closeLogDrawerState(currentState));
+  }, []);
+
+  const handleContentDrawerExited = useCallback(() => {
+    setDrawerState((currentState) => unmountLogDrawerState(currentState));
+  }, []);
 
   useEffect(() => {
     fetchData(page, rowsPerPage, searchKeyword, order, orderBy);
@@ -416,6 +436,7 @@ export default function Log() {
                     userIsAdmin={userIsAdmin}
                     userGroup={userGroup}
                     columnVisibility={columnVisibility}
+                    onOpenContent={handleOpenContent}
                   />
                 ))}
               </TableBody>
@@ -434,6 +455,15 @@ export default function Log() {
           showLastButton
         />
       </Card>
+      {drawerState.mounted && (
+        <LogContentDrawer
+          key={drawerState.version}
+          open={drawerState.open}
+          onClose={handleCloseContent}
+          onExited={handleContentDrawerExited}
+          content={drawerState.content}
+        />
+      )}
     </>
   );
 }

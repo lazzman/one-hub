@@ -58,6 +58,18 @@ grep -r "keyword" .
 
 **Good**: Single source of truth, import everywhere
 
+### Pattern 4: Feature-Specific Viewer Forks
+
+**Bad**: Building a second request/response viewer component just to add one navigation affordance.
+
+**Good**: Extend the shared viewer with an opt-in capability flag so copy, preview chips, and fallback rendering stay in one place.
+
+**Example**:
+- Shared component owns payload parsing, copy behavior, and fallback rendering.
+- Section-level components only decide where the feature should be enabled.
+
+**Why**: Log payload panels tend to accrete one-off UX enhancements. If each section forks its own raw viewer, features like copy, preview detection, and dark-mode styling drift immediately.
+
 ---
 
 ## When to Abstract

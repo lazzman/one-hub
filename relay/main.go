@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"one-api/common"
 	"one-api/common/config"
+	"one-api/common/hijack"
 	"one-api/common/logger"
 	"one-api/common/utils"
 	"one-api/metrics"
@@ -45,6 +46,8 @@ func Relay(c *gin.Context) {
 		return
 	}
 
+	channel := updateLogPreviewSource(c, relay)
+
 	heartbeat := relay.SetHeartbeat(relay.IsStream())
 	if heartbeat != nil {
 		defer heartbeat.Close()
@@ -56,7 +59,6 @@ func Relay(c *gin.Context) {
 		return
 	}
 
-	channel := relay.getProvider().GetChannel()
 	go processChannelRelayError(c.Request.Context(), channel.Id, channel.Name, apiErr, channel.Type)
 
 	retryTimes := config.RetryTimes
@@ -81,7 +83,7 @@ func Relay(c *gin.Context) {
 			break
 		}
 
-		channel = relay.getProvider().GetChannel()
+		channel = updateLogPreviewSource(c, relay)
 		logger.LogError(c.Request.Context(), fmt.Sprintf("using channel #%d(%s) to retry (remain times %d)", channel.Id, channel.Name, i))
 		apiErr, done = RelayHandler(relay)
 		if apiErr == nil {
@@ -102,6 +104,17 @@ func Relay(c *gin.Context) {
 
 		relay.HandleJsonError(apiErr)
 	}
+}
+
+func updateLogPreviewSource(c *gin.Context, relay RelayBaseInterface) *model.Channel {
+	channel := relay.getProvider().GetChannel()
+	hijack.StoreLogPreviewSource(c.Request.Context(), hijack.LogPreviewSource{
+		ChannelType:  channel.Type,
+		ChannelName:  channel.Name,
+		EndpointPath: c.Request.URL.Path,
+		IsStream:     relay.IsStream(),
+	})
+	return channel
 }
 
 func RelayHandler(relay RelayBaseInterface) (err *types.OpenAIErrorWithStatusCode, done bool) {

@@ -1,0 +1,918 @@
+/**
+ * 工具函数模块
+ * 包含 debounce 和内容解析相关函数
+ */
+
+import { createEmptyParsedModel } from './parsers/rawLogParser';
+import { parsePreviewPayload } from './parsers/previewPayloadParser';
+import { buildPreviewModel } from './parsers/previewModel/buildPreviewModel';
+import { ProtocolKind } from './parsers/protocolDetector';
+import { buildSourceDisplayModel } from './parsers/sourceDisplayModel';
+
+/**
+ * 请求格式枚举
+ */
+export const RequestFormat = {
+  OPENAI: 'openai',
+  RESPONSES: 'responses',
+  CLAUDE: 'claude',
+  GEMINI: 'gemini',
+  UNKNOWN: 'unknown'
+};
+
+/**
+ * 防抖函数
+ * @param {Function} func - 要防抖的函数
+ * @param {number} wait - 等待时间（毫秒）
+ * @returns {Function} 防抖后的函数
+ */
+export const debounce = (func, wait) => {
+  let timeout;
+  return function executedFunction(...args) {
+    const later = () => {
+      clearTimeout(timeout);
+      func(...args);
+    };
+    clearTimeout(timeout);
+    timeout = setTimeout(later, wait);
+  };
+};
+
+/**
+ * 检测请求格式
+ * @param {Object} requestJson - 原始请求 JSON
+ * @returns {string} 请求格式类型
+ */
+export const detectRequestFormat = (requestJson) => {
+  if (!requestJson || typeof requestJson !== 'object') {
+    return RequestFormat.UNKNOWN;
+  }
+
+  // Responses 格式：有 input 或 instructions
+  if (requestJson.input !== undefined || requestJson.instructions !== undefined) {
+    return RequestFormat.RESPONSES;
+  }
+
+  // Gemini 格式：有 contents 数组或 systemInstruction
+  if (Array.isArray(requestJson.contents) || requestJson.systemInstruction !== undefined) {
+    return RequestFormat.GEMINI;
+  }
+
+  // Claude 格式：有顶层 system 字段（字符串或数组）且有 messages
+  // 注意：Claude 的 system 是顶层字段，不在 messages 里
+  if (requestJson.system !== undefined && Array.isArray(requestJson.messages)) {
+    // 进一步检查 messages 内容格式是否符合 Claude（content 是数组且包含 type 字段）
+    const firstMsg = requestJson.messages[0];
+    if (firstMsg && Array.isArray(firstMsg.content)) {
+      const firstContent = firstMsg.content[0];
+      if (firstContent && typeof firstContent === 'object' && firstContent.type) {
+        return RequestFormat.CLAUDE;
+      }
+    }
+    // 即使 content 是字符串，有顶层 system 也认为是 Claude
+    return RequestFormat.CLAUDE;
+  }
+
+  // OpenAI 格式：有 messages 数组
+  if (Array.isArray(requestJson.messages)) {
+    return RequestFormat.OPENAI;
+  }
+
+  return RequestFormat.UNKNOWN;
+};
+
+/**
+ * 解析内容项（用于 UI 展示）
+ * @param {Object|string} item - 内容项
+ * @returns {Object} 解析后的内容项
+ */
+export const parseContentItem = (item) => {
+  if (typeof item === 'string') {
+    return { type: 'text', text: item.trim() };
+  } else if (item.type === 'text') {
+    return { type: 'text', text: (item.text || '').trim() };
+  } else if (item.type === 'image_url') {
+    return { type: 'image', url: item.image_url?.url || item.url };
+  } else if (item.type === 'image') {
+    // Claude 图片格式
+    if (item.source?.type === 'base64') {
+      return { type: 'image', url: `data:${item.source.media_type};base64,${item.source.data}`, isBase64: true };
+    } else if (item.source?.type === 'url') {
+      return { type: 'image', url: item.source.url };
+    }
+  }
+  return { type: 'text', text: JSON.stringify(item) };
+};
+
+/**
+ * 解析 Gemini parts 为统一内容格式
+ * @param {Array} parts - Gemini parts 数组
+ * @returns {Array} 统一格式的内容数组
+ */
+export const parseGeminiParts = (parts) => {
+  if (!Array.isArray(parts)) return [];
+  return parts.map((part) => {
+    if (part.text !== undefined) {
+      return { type: 'text', text: part.text };
+    } else if (part.inlineData) {
+      return {
+        type: 'image',
+        url: `data:${part.inlineData.mimeType || 'image/jpeg'};base64,${part.inlineData.data}`,
+        isBase64: true,
+        mimeType: part.inlineData.mimeType
+      };
+    } else if (part.fileData) {
+      return { type: 'image', url: part.fileData.fileUri, mimeType: part.fileData.mimeType };
+    } else if (part.functionCall) {
+      return { type: 'function_call', functionCall: part.functionCall };
+    } else if (part.functionResponse) {
+      return { type: 'function_response', functionResponse: part.functionResponse };
+    }
+    return { type: 'text', text: JSON.stringify(part) };
+  });
+};
+
+/**
+ * 解析 Claude content blocks 为统一内容格式
+ * @param {Array|string} content - Claude content
+ * @returns {Array} 统一格式的内容数组
+ */
+export const parseClaudeContent = (content) => {
+  if (typeof content === 'string') {
+    return [{ type: 'text', text: content }];
+  }
+  if (!Array.isArray(content)) return [];
+  return content.map((item) => {
+    if (item.type === 'text') {
+      return { type: 'text', text: item.text || '' };
+    } else if (item.type === 'image') {
+      if (item.source?.type === 'base64') {
+        return {
+          type: 'image',
+          url: `data:${item.source.media_type};base64,${item.source.data}`,
+          isBase64: true,
+          mimeType: item.source.media_type
+        };
+      } else if (item.source?.type === 'url') {
+        return { type: 'image', url: item.source.url };
+      }
+    } else if (item.type === 'tool_use') {
+      return { type: 'tool_use', toolUse: item };
+    } else if (item.type === 'tool_result') {
+      return { type: 'tool_result', toolResult: item };
+    }
+    return { type: 'text', text: JSON.stringify(item) };
+  });
+};
+
+/**
+ * 解析消息（用于 UI 展示）
+ * @param {Object} message - 消息对象
+ * @returns {Object} 解析后的消息
+ */
+export const parseMessage = (message) => {
+  const { role, content } = message;
+  const parsedContent = Array.isArray(content) ? content.map(parseContentItem) : [{ type: 'text', text: content?.trim() || '' }];
+
+  return {
+    role,
+    content: parsedContent
+  };
+};
+
+/**
+ * 归一化请求结构
+ * 将 OpenAI/Claude/Gemini 格式统一为内部规范结构
+ * @param {Object} requestJson - 原始请求 JSON
+ * @returns {Object} 归一化后的请求结构
+ */
+export const normalizeRequest = (requestJson) => {
+  const format = detectRequestFormat(requestJson);
+
+  const normalized = {
+    format,
+    model: null,
+    systemText: null,
+    messages: [],
+    params: {},
+    tools: null,
+    toolChoice: null,
+    rawRequest: requestJson
+  };
+
+  switch (format) {
+    case RequestFormat.OPENAI:
+      return normalizeFromOpenAI(requestJson, normalized);
+    case RequestFormat.RESPONSES:
+      return normalizeFromResponses(requestJson, normalized);
+    case RequestFormat.CLAUDE:
+      return normalizeFromClaude(requestJson, normalized);
+    case RequestFormat.GEMINI:
+      return normalizeFromGemini(requestJson, normalized);
+    default:
+      // 尝试按 OpenAI 格式解析
+      if (requestJson.messages) {
+        return normalizeFromOpenAI(requestJson, normalized);
+      }
+      return normalized;
+  }
+};
+
+/**
+ * 从 OpenAI 格式归一化
+ */
+const normalizeFromOpenAI = (requestJson, normalized) => {
+  const { messages = [], model, tools, tool_choice, ...otherParams } = requestJson;
+
+  normalized.model = model;
+  normalized.tools = tools;
+  normalized.toolChoice = tool_choice;
+
+  // 提取常用参数
+  const paramKeys = [
+    'temperature',
+    'max_tokens',
+    'top_p',
+    'stream',
+    'frequency_penalty',
+    'presence_penalty',
+    'seed',
+    'response_format',
+    'stop',
+    'n',
+    'logprobs',
+    'top_logprobs'
+  ];
+  paramKeys.forEach((key) => {
+    if (otherParams[key] !== undefined) {
+      normalized.params[key] = otherParams[key];
+    }
+  });
+
+  // 处理 messages，提取 system
+  messages.forEach((msg) => {
+    if (msg.role === 'system') {
+      // 合并多个 system 消息
+      const text = typeof msg.content === 'string' ? msg.content : msg.content?.map((c) => c.text || '').join('\n');
+      normalized.systemText = normalized.systemText ? `${normalized.systemText}\n${text}` : text;
+    }
+    // 所有消息都保留（包括 system），用于 UI 展示
+    normalized.messages.push({
+      role: msg.role,
+      content: normalizeOpenAIContent(msg.content),
+      toolCalls: msg.tool_calls,
+      toolCallId: msg.tool_call_id,
+      name: msg.name
+    });
+  });
+
+  return normalized;
+};
+
+/**
+ * 归一化 OpenAI content
+ */
+const normalizeOpenAIContent = (content) => {
+  if (typeof content === 'string') {
+    return [{ type: 'text', text: content }];
+  }
+  if (!Array.isArray(content)) {
+    return [{ type: 'text', text: String(content || '') }];
+  }
+  return content.map((item) => {
+    if (typeof item === 'string') {
+      return { type: 'text', text: item };
+    }
+    if (item.type === 'text') {
+      return { type: 'text', text: item.text || '' };
+    }
+    if (item.type === 'image_url') {
+      const url = item.image_url?.url || '';
+      const isBase64 = url.startsWith('data:');
+      return { type: 'image', url, isBase64, detail: item.image_url?.detail };
+    }
+    if (item.type === 'input_audio') {
+      return { type: 'audio', audio: item.input_audio };
+    }
+    return item;
+  });
+};
+
+const normalizeResponsesContent = (content) => {
+  const items = Array.isArray(content) ? content : content !== undefined && content !== null ? [content] : [];
+
+  return items
+    .map((item) => {
+      if (typeof item === 'string') {
+        return { type: 'text', text: item };
+      }
+
+      if (!item || typeof item !== 'object') {
+        return { type: 'text', text: String(item || '') };
+      }
+
+      if (item.type === 'input_text' || item.type === 'output_text' || item.type === 'text') {
+        return { type: 'text', text: item.text || '' };
+      }
+
+      if (item.type === 'input_image' || item.type === 'image') {
+        return {
+          type: 'image',
+          url: item.image_url || item.url || '',
+          detail: item.detail,
+          mimeType: item.mime_type,
+          isBase64: typeof (item.image_url || item.url || '') === 'string' && (item.image_url || item.url || '').startsWith('data:')
+        };
+      }
+
+      if (item.type === 'input_audio' || item.type === 'audio') {
+        return {
+          type: 'audio',
+          audio: item.input_audio || item.audio || item.data || '',
+          format: item.format,
+          mimeType: item.mime_type
+        };
+      }
+
+      return item;
+    })
+    .filter(Boolean);
+};
+
+const normalizeResponsesToolCall = (item) => ({
+  id: item?.call_id || item?.id || '',
+  function: {
+    name: item?.name || '',
+    arguments: typeof item?.arguments === 'string' ? item.arguments : JSON.stringify(item?.arguments || {})
+  }
+});
+
+const stringifyStructuredValue = (value, fallback = '') => {
+  if (typeof value === 'string') return value;
+  if (value === undefined || value === null) return fallback;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+};
+
+const extractStructuredText = (value) => {
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => {
+        if (typeof item === 'string') return item;
+        if (item && typeof item === 'object' && typeof item.text === 'string') return item.text;
+        return stringifyStructuredValue(item, '');
+      })
+      .filter(Boolean)
+      .join('\n');
+  }
+  return stringifyStructuredValue(value, '');
+};
+
+const normalizeClaudeToolCall = (item) => ({
+  id: item?.toolUse?.id || item?.id || '',
+  function: {
+    name: item?.toolUse?.name || item?.name || '',
+    arguments: stringifyStructuredValue(item?.toolUse?.input ?? item?.input ?? {}, '{}')
+  }
+});
+
+const normalizeClaudeToolResult = (item) => ({
+  toolCallId: item?.toolResult?.tool_use_id || item?.tool_use_id || item?.toolCallId || '',
+  name: item?.toolResult?.name || item?.name || '',
+  output: extractStructuredText(item?.toolResult?.content ?? item?.content ?? '')
+});
+
+const normalizeGeminiToolCall = (item) => {
+  const functionCall = item?.functionCall || item?.function_call || {};
+  const id = item?.id || functionCall?.id || functionCall?.name || item?.name || '';
+  return {
+    id,
+    function: {
+      name: functionCall?.name || item?.name || '',
+      arguments: stringifyStructuredValue(functionCall?.args ?? functionCall?.arguments ?? item?.args ?? item?.arguments ?? {}, '{}')
+    }
+  };
+};
+
+const normalizeGeminiToolResult = (item) => {
+  const functionResponse = item?.functionResponse || item?.function_response || {};
+  return {
+    toolCallId: functionResponse?.id || item?.id || functionResponse?.name || item?.name || '',
+    name: functionResponse?.name || item?.name || '',
+    output: extractStructuredText(functionResponse?.response ?? item?.response ?? '')
+  };
+};
+
+/**
+ * 从 Responses 格式归一化
+ */
+const normalizeFromResponses = (requestJson, normalized) => {
+  const { input, instructions, model, tools, tool_choice, ...otherParams } = requestJson;
+
+  normalized.model = model;
+  normalized.tools = tools;
+  normalized.toolChoice = tool_choice;
+
+  if (typeof instructions === 'string' && instructions.trim()) {
+    normalized.systemText = instructions;
+    normalized.messages.push({
+      role: 'system',
+      content: [{ type: 'text', text: instructions }]
+    });
+  }
+
+  const paramKeys = ['temperature', 'max_output_tokens', 'max_tokens', 'top_p', 'stream', 'store', 'parallel_tool_calls'];
+  paramKeys.forEach((key) => {
+    if (otherParams[key] !== undefined) {
+      normalized.params[key] = otherParams[key];
+    }
+  });
+
+  const normalizedInput = Array.isArray(input) ? input : input !== undefined ? [input] : [];
+  normalizedInput.forEach((item) => {
+    if (typeof item === 'string') {
+      normalized.messages.push({
+        role: 'user',
+        content: [{ type: 'text', text: item }]
+      });
+      return;
+    }
+
+    if (!item || typeof item !== 'object') return;
+
+    if (item.type === 'message') {
+      const normalizedContent = normalizeResponsesContent(item.content);
+      const toolCalls = normalizedContent
+        .filter((part) => part && typeof part === 'object' && part.type === 'function_call')
+        .map(normalizeResponsesToolCall);
+      const textContent = normalizedContent.filter((part) => !(part && typeof part === 'object' && part.type === 'function_call'));
+      normalized.messages.push({
+        role: item.role || 'user',
+        content: textContent,
+        ...(toolCalls.length > 0 ? { toolCalls } : {})
+      });
+      return;
+    }
+
+    if (item.type === 'function_call') {
+      normalized.messages.push({
+        role: item.role || 'assistant',
+        content: [],
+        toolCalls: [normalizeResponsesToolCall(item)]
+      });
+      return;
+    }
+
+    if (item.type === 'function_call_output') {
+      normalized.messages.push({
+        role: 'tool',
+        content: [{ type: 'text', text: typeof item.output === 'string' ? item.output : JSON.stringify(item.output || {}) }],
+        toolCallId: item.call_id || item.id || '',
+        name: item.name || ''
+      });
+      return;
+    }
+
+    if (item.role || item.content !== undefined) {
+      normalized.messages.push({
+        role: item.role || 'user',
+        content: normalizeResponsesContent(item.content)
+      });
+    }
+  });
+
+  return normalized;
+};
+
+/**
+ * 从 Claude 格式归一化
+ */
+const normalizeFromClaude = (requestJson, normalized) => {
+  const { messages = [], model, system, tools, tool_choice, ...otherParams } = requestJson;
+
+  normalized.model = model;
+  normalized.tools = tools;
+  normalized.toolChoice = tool_choice;
+
+  // 处理顶层 system（Claude 特有）
+  if (system !== undefined) {
+    if (typeof system === 'string') {
+      normalized.systemText = system;
+    } else if (Array.isArray(system)) {
+      // Claude 的 system 可以是 content blocks 数组
+      normalized.systemText = system.map((item) => (typeof item === 'string' ? item : item.text || '')).join('\n');
+    }
+  }
+
+  // 提取常用参数
+  const paramKeys = ['temperature', 'max_tokens', 'top_p', 'top_k', 'stream', 'stop_sequences', 'metadata'];
+  paramKeys.forEach((key) => {
+    if (otherParams[key] !== undefined) {
+      normalized.params[key] = otherParams[key];
+    }
+  });
+
+  // 处理 messages
+  messages.forEach((msg) => {
+    const normalizedContent = parseClaudeContent(msg.content);
+    const toolCalls = normalizedContent
+      .filter((item) => item && typeof item === 'object' && item.type === 'tool_use')
+      .map(normalizeClaudeToolCall);
+    const toolResults = normalizedContent
+      .filter((item) => item && typeof item === 'object' && item.type === 'tool_result')
+      .map(normalizeClaudeToolResult);
+    const textContent = normalizedContent.filter(
+      (item) => !(item && typeof item === 'object' && (item.type === 'tool_use' || item.type === 'tool_result'))
+    );
+
+    if (toolResults.length > 0) {
+      toolResults.forEach((toolResult) => {
+        normalized.messages.push({
+          role: 'tool',
+          content: [{ type: 'text', text: toolResult.output }],
+          toolCallId: toolResult.toolCallId,
+          name: toolResult.name
+        });
+      });
+    }
+
+    if (textContent.length > 0 || toolCalls.length > 0) {
+      normalized.messages.push({
+        role: msg.role,
+        content: textContent,
+        ...(toolCalls.length > 0 ? { toolCalls } : {})
+      });
+    }
+  });
+
+  return normalized;
+};
+
+/**
+ * 从 Gemini 格式归一化
+ */
+const normalizeFromGemini = (requestJson, normalized) => {
+  const { contents = [], systemInstruction, generationConfig, tools, toolConfig, model } = requestJson;
+
+  normalized.model = model;
+  normalized.tools = tools;
+  normalized.toolChoice = toolConfig;
+
+  // 处理 systemInstruction
+  if (systemInstruction) {
+    if (typeof systemInstruction === 'string') {
+      normalized.systemText = systemInstruction;
+    } else if (systemInstruction.parts) {
+      normalized.systemText = systemInstruction.parts.map((p) => p.text || '').join('\n');
+    }
+  }
+
+  // 处理 generationConfig
+  if (generationConfig) {
+    if (generationConfig.temperature !== undefined) normalized.params.temperature = generationConfig.temperature;
+    if (generationConfig.maxOutputTokens !== undefined) normalized.params.max_tokens = generationConfig.maxOutputTokens;
+    if (generationConfig.topP !== undefined) normalized.params.top_p = generationConfig.topP;
+    if (generationConfig.topK !== undefined) normalized.params.top_k = generationConfig.topK;
+    if (generationConfig.stopSequences !== undefined) normalized.params.stop = generationConfig.stopSequences;
+    // 保留原始 generationConfig 以便转换回 Gemini 格式
+    normalized.params._generationConfig = generationConfig;
+  }
+
+  // 处理 contents
+  contents.forEach((content) => {
+    const role = content.role === 'model' ? 'assistant' : content.role || 'user';
+    const normalizedParts = parseGeminiParts(content.parts);
+    const toolCalls = normalizedParts
+      .filter((item) => item && typeof item === 'object' && item.type === 'function_call')
+      .map(normalizeGeminiToolCall);
+    const toolResults = normalizedParts
+      .filter((item) => item && typeof item === 'object' && item.type === 'function_response')
+      .map(normalizeGeminiToolResult);
+    const textContent = normalizedParts.filter(
+      (item) => !(item && typeof item === 'object' && (item.type === 'function_call' || item.type === 'function_response'))
+    );
+
+    if (toolResults.length > 0) {
+      toolResults.forEach((toolResult) => {
+        normalized.messages.push({
+          role: 'tool',
+          content: [{ type: 'text', text: toolResult.output }],
+          toolCallId: toolResult.toolCallId,
+          name: toolResult.name
+        });
+      });
+    }
+
+    if (textContent.length > 0 || toolCalls.length > 0) {
+      normalized.messages.push({
+        role,
+        content: textContent,
+        ...(toolCalls.length > 0 ? { toolCalls } : {})
+      });
+    }
+  });
+
+  return normalized;
+};
+
+/**
+ * 提取请求和响应部分
+ * @param {string} content - 原始内容
+ * @returns {Array} [请求部分, 响应部分]
+ */
+export const extractRequestAndResponse = (content) => {
+  const lastIndex = content.lastIndexOf('【Response Body】:');
+
+  // 如果找不到响应体标记，则将所有内容作为请求部分
+  if (lastIndex === -1) {
+    return [content, '[{"type": "text", "text": ""}]'];
+  }
+
+  const requestPart = content.substring(0, lastIndex);
+  const responsePart = content.substring(lastIndex + '【Response Body】:'.length);
+
+  // 如果响应部分为空，也返回空的JSON对象字符串
+  return [requestPart, responsePart.trim() || '[{"type": "text", "text": ""}]'];
+};
+
+/**
+ * 解析请求体
+ * @param {string} requestPart - 请求部分字符串
+ * @returns {Object} 解析后的请求体
+ */
+export const parseRequestBody = (requestPart) => {
+  const match = requestPart.match(/【Request Body】:([\s\S]*)/);
+  if (!match?.[1]?.trim()) {
+    throw new Error('无法找到请求体内容');
+  }
+
+  try {
+    return JSON.parse(match[1].trim());
+  } catch {
+    throw new Error('请求体内容不是有效的JSON格式');
+  }
+};
+
+/**
+ * 解析响应体
+ * @param {string} responsePart - 响应部分字符串
+ * @returns {Object|string} 解析后的响应体
+ */
+export const parseResponseBody = (responsePart) => {
+  const trimmed = responsePart?.trim?.() || '';
+  if (!trimmed) return '';
+
+  try {
+    const parsed = JSON.parse(trimmed);
+
+    // 如果响应数据包含 type 和 content 字段（如 stream 类型的响应），
+    // 直接提取并返回 content 的内容，跳过外层包装
+    if (parsed && typeof parsed === 'object' && 'type' in parsed && 'content' in parsed) {
+      return parsed.content;
+    }
+
+    return parsed;
+  } catch {
+    // 降级返回原文，避免抛错影响外层流程
+    return trimmed;
+  }
+};
+
+/**
+ * 提取响应体内容（处理 type/content 包装）
+ * @param {string} responsePart - 响应部分字符串
+ * @returns {string} 提取后的响应体字符串
+ */
+export const extractResponseContent = (responsePart) => {
+  try {
+    const parsed = JSON.parse(responsePart.trim());
+
+    // 如果响应数据包含 type 和 content 字段（如 stream 类型的响应），
+    // 直接提取 content 的内容，跳过外层包装
+    if (parsed && typeof parsed === 'object' && 'type' in parsed && 'content' in parsed) {
+      return JSON.stringify(parsed.content, null, 2);
+    }
+
+    return responsePart.trim();
+  } catch {
+    return responsePart.trim();
+  }
+};
+
+/**
+ * 将协议类型映射为旧版 RequestFormat
+ * @param {string} protocol
+ * @returns {string}
+ */
+const mapProtocolToRequestFormat = (protocol) => {
+  if (protocol === ProtocolKind.CLAUDE) return RequestFormat.CLAUDE;
+  if (protocol === ProtocolKind.GEMINI) return RequestFormat.GEMINI;
+  if (protocol === ProtocolKind.RESPONSES) return RequestFormat.RESPONSES;
+  if (
+    protocol === ProtocolKind.OPENAI_CHAT ||
+    protocol === ProtocolKind.OPENAI_COMPATIBLE ||
+    protocol === ProtocolKind.OPENAI_COMPLETIONS ||
+    protocol === ProtocolKind.OPENAI_EMBEDDINGS ||
+    protocol === ProtocolKind.OPENAI_IMAGES ||
+    protocol === ProtocolKind.OPENAI_AUDIO
+  ) return RequestFormat.OPENAI;
+  return RequestFormat.UNKNOWN;
+};
+
+/**
+ * 创建兜底 normalized 结构
+ * @param {string} protocol
+ * @param {Object} rawRequest
+ * @returns {Object}
+ */
+const createNormalizedFallback = (protocol, rawRequest = {}) => ({
+  format: mapProtocolToRequestFormat(protocol),
+  model: null,
+  systemText: null,
+  messages: [],
+  params: {},
+  tools: null,
+  toolChoice: null,
+  rawRequest: rawRequest && typeof rawRequest === 'object' ? rawRequest : {}
+});
+
+/**
+ * 创建空解析结果（兼容旧 UI + 提供新统一模型）
+ * @returns {Object}
+ */
+const createEmptyParseResult = () => {
+  const empty = createEmptyParsedModel();
+  const viewModel = {
+    protocol: empty.protocol || ProtocolKind.UNKNOWN,
+    source: {
+      protocol: empty.protocol || ProtocolKind.UNKNOWN,
+      protocolHint: empty.protocol || ProtocolKind.UNKNOWN,
+      provider: 'unknown',
+      channelType: 0,
+      channelName: '',
+      endpointPath: '',
+      isStream: false,
+      display: buildSourceDisplayModel({ source: { protocol_hint: ProtocolKind.UNKNOWN, provider: 'unknown' } })
+    },
+    request: { raw: empty.request.raw || '', parsed: empty.request.parsed ?? null, summary: {}, normalized: null, convertTargets: [] },
+    response: { raw: empty.response.raw || '', parsed: empty.response.parsed ?? null, finalText: '', type: '', rawOnly: false },
+    events: Array.isArray(empty.events) ? empty.events : [],
+    messages: Array.isArray(empty.messages) ? empty.messages : [],
+    toolCalls: Array.isArray(empty.toolCalls) ? empty.toolCalls : [],
+    reasoning: Array.isArray(empty.reasoning) ? empty.reasoning : [],
+    media: Array.isArray(empty.media) ? empty.media : [],
+    trace: [],
+    capabilities: {
+      request: false,
+      conversation: false,
+      finalAnswer: false,
+      reasoning: false,
+      tools: false,
+      media: false,
+      trace: false,
+      rawResponse: false
+    }
+  };
+
+  return {
+    protocol: viewModel.protocol,
+    viewModel,
+    requestProps: empty.requestProps || {},
+    rawRequestBody: empty.rawRequestBody || '',
+    messages: Array.isArray(empty.messagesForUI) ? empty.messagesForUI : [],
+    response: empty.responseForUI || {},
+    rawResponseBody: empty.rawResponseBody || '',
+    responsesFinalText: empty.responsesFinalText || '',
+    normalized: createNormalizedFallback(viewModel.protocol, empty.normalizedRequest || {}),
+    // 额外对外字段（供后续 UI 重构消费）
+    request: viewModel.request,
+    responseMeta: viewModel.response,
+    events: viewModel.events,
+    toolCalls: viewModel.toolCalls,
+    reasoning: viewModel.reasoning,
+    media: viewModel.media,
+    linearTrace: viewModel.trace,
+    flags: {
+      payloadParsed: false,
+      requestParsed: false,
+      responseParsed: false,
+      parseFailed: false,
+      usedFallback: false
+    },
+    diagnostics: {
+      payloadError: null,
+      requestError: null,
+      responseError: null,
+      responseIsSSE: false,
+      sseDone: false,
+      sseError: null
+    },
+    source: viewModel.source,
+    rawPayload: '',
+    capabilities: viewModel.capabilities
+  };
+};
+
+/**
+ * 解析完整内容
+ * @param {string} content - 原始内容字符串
+ * @returns {Object} 解析后的内容对象
+ */
+export const parseContent = (content) => {
+  if (!content?.trim()) {
+    return createEmptyParseResult();
+  }
+
+  try {
+    const parsedPayload = parsePreviewPayload(content);
+    const previewModel = buildPreviewModel(parsedPayload);
+    const protocol = previewModel?.source?.protocol || ProtocolKind.UNKNOWN;
+
+    const requestParsed = previewModel?.request?.parsed;
+    const requestObject = requestParsed && typeof requestParsed === 'object' && !Array.isArray(requestParsed) ? requestParsed : {};
+
+    let normalized = createNormalizedFallback(protocol, requestObject);
+    if (Object.keys(requestObject).length > 0) {
+      normalized = normalizeRequest(requestObject);
+      if (normalized.format === RequestFormat.UNKNOWN) {
+        normalized = {
+          ...normalized,
+          format: mapProtocolToRequestFormat(protocol)
+        };
+      }
+    }
+
+    const viewModel = {
+      protocol,
+      source: {
+        ...previewModel.source,
+        display:
+          previewModel.source?.display ||
+          buildSourceDisplayModel({
+            source: previewModel.source,
+            requestParsed: previewModel.request?.parsed,
+            responseParsed: previewModel.response?.parsed
+          })
+      },
+      request: {
+        raw: previewModel.request?.raw || '',
+        parsed: previewModel.request?.parsed ?? null,
+        summary: previewModel.request?.summary || {},
+        normalized: normalized,
+        convertTargets: Array.isArray(previewModel.request?.convertTargets) ? previewModel.request.convertTargets : []
+      },
+      response: {
+        raw: previewModel.response?.raw || '',
+        parsed: previewModel.response?.parsed ?? null,
+        finalText: previewModel.response?.finalText || '',
+        type: previewModel.response?.type || '',
+        rawOnly: Boolean(previewModel.response?.rawOnly)
+      },
+      events: Array.isArray(previewModel.events) ? previewModel.events : parsedPayload.events || [],
+      messages: Array.isArray(previewModel.conversation) ? previewModel.conversation : [],
+      toolCalls: Array.isArray(previewModel.tools) ? previewModel.tools : [],
+      reasoning: Array.isArray(previewModel.reasoning) ? previewModel.reasoning : [],
+      media: Array.isArray(previewModel.media) ? previewModel.media : [],
+      trace: Array.isArray(previewModel.trace) ? previewModel.trace : [],
+      capabilities: previewModel.capabilities || {}
+    };
+
+    return {
+      protocol,
+      viewModel,
+      requestProps: previewModel.request?.summary || {},
+      rawRequestBody: viewModel.request.raw,
+      messages: viewModel.messages,
+      response: viewModel.response.parsed ?? {},
+      rawResponseBody: viewModel.response.raw,
+      responsesFinalText: viewModel.response.finalText || '',
+      normalized,
+      request: viewModel.request,
+      responseMeta: viewModel.response,
+      events: viewModel.events,
+      toolCalls: viewModel.toolCalls,
+      reasoning: viewModel.reasoning,
+      media: viewModel.media,
+      linearTrace: viewModel.trace,
+      flags: previewModel.flags,
+      diagnostics: {
+        payloadError: parsedPayload.error ? String(parsedPayload.error) : null,
+        requestError: parsedPayload.request?.error ? String(parsedPayload.request.error) : null,
+        responseError: parsedPayload.response?.error ? String(parsedPayload.response.error) : null,
+        responseIsSSE: Boolean(parsedPayload.response?.isSSE),
+        sseDone: Boolean(parsedPayload.response?.sseDone),
+        sseError: parsedPayload.response?.sseError ? String(parsedPayload.response.sseError) : null
+      },
+      source: previewModel.source,
+      rawPayload: previewModel.raw?.payload || content,
+      capabilities: viewModel.capabilities
+    };
+  } catch (error) {
+    console.error('解析内容时出错:', error.message);
+    return createEmptyParseResult();
+  }
+};
