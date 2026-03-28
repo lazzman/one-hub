@@ -12,13 +12,15 @@ import (
 	"one-api/common/utils"
 	"one-api/metrics"
 	"one-api/model"
+	providersBase "one-api/providers/base"
 	"one-api/relay/relay_util"
 	"one-api/types"
-	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 )
+
+var getProviderForPreMapping = GetProvider
 
 func Relay(c *gin.Context) {
 	relay := Path2Relay(c, c.Request.URL.Path)
@@ -161,35 +163,54 @@ func shouldCooldowns(c *gin.Context, channel *model.Channel, apiErr *types.OpenA
 
 // applies pre-mapping before setRequest to ensure modifications take effect
 func applyPreMappingBeforeRequest(c *gin.Context) {
-	// check if this is a chat completion request that needs pre-mapping
-	path := c.Request.URL.Path
-	if !(strings.HasPrefix(path, "/v1/chat/completions") || strings.HasPrefix(path, "/v1/completions")) {
-		return
-	}
-
 	bodyBytes, err := io.ReadAll(c.Request.Body)
 	if err != nil {
 		return
 	}
 	c.Request.Body.Close()
 
-	// Use defer to ensure request body is always restored
-	var finalBodyBytes []byte = bodyBytes // default to original body
+	finalBodyBytes := bodyBytes
 	defer func() {
 		c.Request.Body = io.NopCloser(bytes.NewBuffer(finalBodyBytes))
 	}()
 
-	var requestBody struct {
-		Model string `json:"model"`
+	var requestMap map[string]interface{}
+	if err := json.Unmarshal(bodyBytes, &requestMap); err != nil {
+		return
 	}
-	if err := json.Unmarshal(bodyBytes, &requestBody); err != nil || requestBody.Model == "" {
+	if !shouldApplyPreAddForJSONRequest(c.Request.URL.Path, requestMap) {
 		return
 	}
 
-	provider, _, err := GetProvider(c, requestBody.Model)
+	originalBody := c.Request.Body
+	c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+	defer func() {
+		c.Request.Body = originalBody
+	}()
+
+	modelName, _ := requestMap["model"].(string)
+	provider, _, err := getProviderForPreMapping(c, modelName)
 	if err != nil {
 		return
 	}
+
+	applyPreMappingBeforeRequestWithProvider(c, provider)
+	if modifiedBodyBytes, err := io.ReadAll(c.Request.Body); err == nil {
+		finalBodyBytes = modifiedBodyBytes
+	}
+}
+
+func applyPreMappingBeforeRequestWithProvider(c *gin.Context, provider providersBase.ProviderInterface) {
+	bodyBytes, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		return
+	}
+	c.Request.Body.Close()
+
+	finalBodyBytes := bodyBytes
+	defer func() {
+		c.Request.Body = io.NopCloser(bytes.NewBuffer(finalBodyBytes))
+	}()
 
 	customParams, err := provider.CustomParameterHandler()
 	if err != nil || customParams == nil {
@@ -205,11 +226,11 @@ func applyPreMappingBeforeRequest(c *gin.Context) {
 	if err := json.Unmarshal(bodyBytes, &requestMap); err != nil {
 		return
 	}
+	if !shouldApplyPreAddForJSONRequest(c.Request.URL.Path, requestMap) {
+		return
+	}
 
-	// Apply custom parameter merging
 	modifiedRequestMap := mergeCustomParamsForPreMapping(requestMap, customParams)
-
-	// Convert back to JSON - if successful, use modified body; otherwise use original
 	if modifiedBodyBytes, err := json.Marshal(modifiedRequestMap); err == nil {
 		finalBodyBytes = modifiedBodyBytes
 	}

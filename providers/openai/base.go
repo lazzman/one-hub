@@ -189,61 +189,14 @@ func (p *OpenAIProvider) GetRequestHeaders() (headers map[string]string) {
 
 // mergeCustomParams 将自定义参数合并到请求体中
 func (p *OpenAIProvider) mergeCustomParams(requestMap map[string]interface{}, customParams map[string]interface{}) map[string]interface{} {
-	// 检查是否需要覆盖已有参数
-	shouldOverwrite := false
-	if overwriteValue, exists := customParams["overwrite"]; exists {
-		if boolValue, ok := overwriteValue.(bool); ok {
-			shouldOverwrite = boolValue
-		}
-	}
-
-	// 如果配置是pre_add，而不是发送阶段，则此处跳过所有处理
 	if preAdd, exists := customParams["pre_add"]; exists && preAdd == true {
 		return requestMap
 	}
 
-	// 检查是否按照模型粒度控制
-	perModel := false
-	if perModelValue, exists := customParams["per_model"]; exists {
-		if boolValue, ok := perModelValue.(bool); ok {
-			perModel = boolValue
-		}
-	}
-
-	customParamsModel := customParams
-	if perModel {
-		if modelValue, ok := requestMap["model"].(string); ok {
-			if v, exists := customParams[modelValue]; exists {
-				if modelConfig, ok := v.(map[string]interface{}); ok {
-					customParamsModel = modelConfig
-				} else {
-					customParamsModel = map[string]interface{}{}
-				}
-			} else {
-				customParamsModel = map[string]interface{}{}
-			}
-		}
-	}
-
-	// 添加额外参数
-	for key, value := range customParamsModel {
-		// 忽略 keys "stream", "overwrite", and "per_model"
-		if key == "stream" || key == "overwrite" || key == "per_model" || key == "pre_add" {
-			continue
-		}
-		// 根据覆盖设置决定如何添加参数
-		if shouldOverwrite {
-			// 覆盖模式：直接添加/覆盖参数
-			requestMap[key] = value
-		} else {
-			// 非覆盖模式：仅当参数不存在时添加
-			if _, exists := requestMap[key]; !exists {
-				requestMap[key] = value
-			}
-		}
-	}
-
-	return requestMap
+	overwrite := base.GetCustomParamsOverwrite(customParams)
+	mappedModel, _ := requestMap["model"].(string)
+	selected := base.SelectCustomParamsForPhase(customParams, base.CustomParamsPhaseSend, p.GetOriginalModel(), mappedModel)
+	return base.MergeSelectedCustomParams(requestMap, selected, overwrite)
 }
 
 // mergeExtraBodyFromRawRequest 从原始请求基础上合并处理后的请求字段

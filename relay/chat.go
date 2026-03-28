@@ -181,6 +181,7 @@ func (r *relayChat) getUsageResponse() string {
 
 func (r *relayChat) compatibleSend(resProvider providersBase.ResponsesInterface) (err *types.OpenAIErrorWithStatusCode, done bool) {
 	resRequest := r.chatRequest.ToResponsesRequest()
+	resRequest.Model = r.modelName
 	resRequest.ConvertChat = true
 
 	if r.chatRequest.Stream {
