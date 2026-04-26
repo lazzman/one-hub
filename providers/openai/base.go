@@ -221,6 +221,25 @@ func (p *OpenAIProvider) mergeExtraBodyFromRawRequest(requestMap map[string]inte
 	return rawRequest
 }
 
+func (p *OpenAIProvider) mergeResponsesRawRequest(requestMap map[string]interface{}) map[string]interface{} {
+	rawBody, ok := p.GetRawBody()
+	if !ok || rawBody == nil {
+		return requestMap
+	}
+
+	var rawRequest map[string]interface{}
+	err := json.Unmarshal(rawBody, &rawRequest)
+	if err != nil || rawRequest == nil {
+		return requestMap
+	}
+
+	if modelName, ok := requestMap["model"]; ok {
+		rawRequest["model"] = modelName
+	}
+
+	return rawRequest
+}
+
 // 修改GetRequestTextBody函数中的对应部分
 func (p *OpenAIProvider) GetRequestTextBody(relayMode int, ModelName string, request any) (*http.Request, *types.OpenAIErrorWithStatusCode) {
 	url, errWithCode := p.GetSupportedAPIUri(relayMode)
@@ -256,7 +275,9 @@ func (p *OpenAIProvider) GetRequestTextBody(relayMode int, ModelName string, req
 		}
 
 		// 如果允许额外字段透传，从原始请求中获取额外字段
-		if p.Channel.AllowExtraBody {
+		if p.Channel.AllowExtraBody && relayMode == config.RelayModeResponses {
+			requestMap = p.mergeResponsesRawRequest(requestMap)
+		} else if p.Channel.AllowExtraBody {
 			requestMap = p.mergeExtraBodyFromRawRequest(requestMap)
 		}
 

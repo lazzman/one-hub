@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
@@ -70,4 +71,131 @@ func TestResponsesCustomParams_SendPhaseUsesMappedModel(t *testing.T) {
 	assert.Contains(t, capturedBody, `"service_tier":"flex"`)
 	assert.Contains(t, capturedBody, `"effort":"high"`)
 	assert.NotContains(t, capturedBody, `"service_tier":"priority"`)
+}
+
+func TestResponsesAllowExtraBodyUsesRawToolsAndMappedModel(t *testing.T) {
+	requester.InitHttpClient()
+
+	url, server, teardown := setupOpenAITestServer()
+	defer teardown()
+
+	var capturedBody string
+	server.RegisterHandler("/v1/responses", func(w http.ResponseWriter, r *http.Request) {
+		bodyBytes, _ := io.ReadAll(r.Body)
+		capturedBody = string(bodyBytes)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"resp_123","model":"gpt-5.4-mini","object":"response","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`))
+	})
+
+	body := `{"model":"gpt-5.4-mini-high","input":"hi","tools":[{"type":"tool_search","server_only":{"mode":"strict"}}]}`
+	c, _ := test.GetContext("POST", "/v1/responses", test.RequestJSONConfig(), strings.NewReader(body))
+	c.Set(config.GinRequestBodyKey, []byte(body))
+
+	mapping := `{"gpt-5.4-mini-high":"gpt-5.4-mini"}`
+	proxy := ""
+	channel := test.GetChannel(config.ChannelTypeOpenAI, url, "", proxy, mapping)
+	channel.AllowExtraBody = true
+
+	provider := CreateOpenAIProvider(&channel, url)
+	provider.SetContext(c)
+	provider.SetOriginalModel("gpt-5.4-mini-high")
+	provider.SetUsage(&types.Usage{})
+
+	req := &types.OpenAIResponsesRequest{
+		Model: "gpt-5.4-mini",
+		Input: "hi",
+		Tools: []types.ResponsesTools{
+			{Type: "tool_search"},
+		},
+	}
+	_, errWithCode := provider.CreateResponses(req)
+
+	assert.Nil(t, errWithCode)
+
+	var captured map[string]interface{}
+	assert.NoError(t, json.Unmarshal([]byte(capturedBody), &captured))
+	assert.Equal(t, "gpt-5.4-mini", captured["model"])
+	assert.Contains(t, capturedBody, `"server_only"`)
+}
+
+func TestResponsesAllowExtraBodyFalseKeepsStructSerialization(t *testing.T) {
+	requester.InitHttpClient()
+
+	url, server, teardown := setupOpenAITestServer()
+	defer teardown()
+
+	var capturedBody string
+	server.RegisterHandler("/v1/responses", func(w http.ResponseWriter, r *http.Request) {
+		bodyBytes, _ := io.ReadAll(r.Body)
+		capturedBody = string(bodyBytes)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"resp_123","model":"gpt-5.4-mini","object":"response","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`))
+	})
+
+	body := `{"model":"gpt-5.4-mini-high","input":"hi","tools":[{"type":"tool_search","server_only":{"mode":"strict"}}]}`
+	c, _ := test.GetContext("POST", "/v1/responses", test.RequestJSONConfig(), strings.NewReader(body))
+	c.Set(config.GinRequestBodyKey, []byte(body))
+
+	mapping := `{"gpt-5.4-mini-high":"gpt-5.4-mini"}`
+	proxy := ""
+	channel := test.GetChannel(config.ChannelTypeOpenAI, url, "", proxy, mapping)
+
+	provider := CreateOpenAIProvider(&channel, url)
+	provider.SetContext(c)
+	provider.SetOriginalModel("gpt-5.4-mini-high")
+	provider.SetUsage(&types.Usage{})
+
+	req := &types.OpenAIResponsesRequest{
+		Model: "gpt-5.4-mini",
+		Input: "hi",
+		Tools: []types.ResponsesTools{
+			{Type: "tool_search"},
+		},
+	}
+	_, errWithCode := provider.CreateResponses(req)
+
+	assert.Nil(t, errWithCode)
+	assert.Contains(t, capturedBody, `"model":"gpt-5.4-mini"`)
+	assert.NotContains(t, capturedBody, `"server_only"`)
+}
+
+func TestResponsesAllowExtraBodyFallsBackWhenRawBodyInvalid(t *testing.T) {
+	requester.InitHttpClient()
+
+	url, server, teardown := setupOpenAITestServer()
+	defer teardown()
+
+	var capturedBody string
+	server.RegisterHandler("/v1/responses", func(w http.ResponseWriter, r *http.Request) {
+		bodyBytes, _ := io.ReadAll(r.Body)
+		capturedBody = string(bodyBytes)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"resp_123","model":"gpt-5.4-mini","object":"response","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`))
+	})
+
+	c, _ := test.GetContext("POST", "/v1/responses", test.RequestJSONConfig(), strings.NewReader(`not-json`))
+	c.Set(config.GinRequestBodyKey, []byte(`not-json`))
+
+	mapping := `{"gpt-5.4-mini-high":"gpt-5.4-mini"}`
+	proxy := ""
+	channel := test.GetChannel(config.ChannelTypeOpenAI, url, "", proxy, mapping)
+	channel.AllowExtraBody = true
+
+	provider := CreateOpenAIProvider(&channel, url)
+	provider.SetContext(c)
+	provider.SetOriginalModel("gpt-5.4-mini-high")
+	provider.SetUsage(&types.Usage{})
+
+	req := &types.OpenAIResponsesRequest{
+		Model: "gpt-5.4-mini",
+		Input: "hi",
+		Tools: []types.ResponsesTools{
+			{Type: "tool_search"},
+		},
+	}
+	_, errWithCode := provider.CreateResponses(req)
+
+	assert.Nil(t, errWithCode)
+	assert.Contains(t, capturedBody, `"model":"gpt-5.4-mini"`)
+	assert.Contains(t, capturedBody, `"tools":[{"type":"tool_search"}]`)
 }

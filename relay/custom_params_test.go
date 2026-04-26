@@ -48,3 +48,22 @@ func TestApplyPreMappingBeforeRequest_ResponsesUsesOriginalModelConfig(t *testin
 	assert.Contains(t, string(bodyBytes), `"service_tier":"priority"`)
 	assert.NotContains(t, string(bodyBytes), `"service_tier":"flex"`)
 }
+
+func TestRelayResponsesSetRequestCachesOriginalRawBody(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	body := `{"model":"gpt-5.4-mini-high","input":"hi","tools":[{"type":"tool_search","server_only":{"mode":"strict"}}]}`
+	c, _ := test.GetContext("POST", "/v1/responses", test.RequestJSONConfig(), strings.NewReader(body))
+
+	relay := NewRelayResponses(c)
+	err := relay.setRequest()
+
+	assert.NoError(t, err)
+	assert.Equal(t, "gpt-5.4-mini-high", relay.responsesRequest.Model)
+
+	rawBody, exists := c.Get(config.GinRequestBodyKey)
+	assert.True(t, exists)
+	bodyBytes, ok := rawBody.([]byte)
+	assert.True(t, ok)
+	assert.Equal(t, body, string(bodyBytes))
+}
