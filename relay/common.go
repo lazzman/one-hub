@@ -537,7 +537,7 @@ func shouldRetry(c *gin.Context, apiErr *types.OpenAIErrorWithStatusCode, channe
 
 	metrics.RecordProvider(c, apiErr.StatusCode)
 
-	if apiErr.LocalError ||
+	if (apiErr.LocalError && !isRetryableResponsesCompactUnsupportedError(apiErr)) ||
 		(channelId > 0 && !ignore) {
 		return false
 	}
@@ -559,6 +559,14 @@ func shouldRetry(c *gin.Context, apiErr *types.OpenAIErrorWithStatusCode, channe
 		return false
 	}
 	return true
+}
+
+func getChannelRetryTimes(c *gin.Context, apiErr *types.OpenAIErrorWithStatusCode, channelType int, done bool) int {
+	if done || !shouldRetry(c, apiErr, channelType) {
+		return 0
+	}
+
+	return config.RetryTimes
 }
 
 func shouldRetryBadRequest(channelType int, apiErr *types.OpenAIErrorWithStatusCode) bool {

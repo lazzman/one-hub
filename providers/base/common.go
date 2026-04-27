@@ -31,6 +31,7 @@ type ProviderConfig struct {
 	Rerank              string
 	ChatRealtime        string
 	Responses           string
+	ResponsesCompact    string
 }
 
 func (pc *ProviderConfig) SetAPIUri(customMapping map[string]interface{}) {
@@ -46,6 +47,7 @@ func (pc *ProviderConfig) SetAPIUri(customMapping map[string]interface{}) {
 		config.RelayModeImagesEdits:        &pc.ImagesEdit,
 		config.RelayModeImagesVariations:   &pc.ImagesVariations,
 		config.RelayModeResponses:          &pc.Responses,
+		config.RelayModeResponsesCompact:   &pc.ResponsesCompact,
 	}
 
 	for key, value := range customMapping {
@@ -208,6 +210,8 @@ func (p *BaseProvider) GetAPIUri(relayMode int) string {
 		return p.Config.ChatRealtime
 	case config.RelayModeResponses:
 		return p.Config.Responses
+	case config.RelayModeResponsesCompact:
+		return p.Config.ResponsesCompact
 	default:
 		return ""
 	}
@@ -216,7 +220,11 @@ func (p *BaseProvider) GetAPIUri(relayMode int) string {
 func (p *BaseProvider) GetSupportedAPIUri(relayMode int) (url string, err *types.OpenAIErrorWithStatusCode) {
 	url = p.GetAPIUri(relayMode)
 	if url == "" {
-		err = common.StringErrorWrapperLocal("The API interface is not supported", "unsupported_api", http.StatusNotImplemented)
+		message := "The API interface is not supported"
+		if relayMode == config.RelayModeResponsesCompact {
+			message = "The responses compact API interface is not supported"
+		}
+		err = common.StringErrorWrapperLocal(message, "unsupported_api", http.StatusNotImplemented)
 		return
 	}
 

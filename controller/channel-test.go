@@ -120,7 +120,7 @@ func testChannel(channel *model.Channel, testModel string) (openaiErr *types.Ope
 			Stream: false,
 		}
 
-		response, openAIErrorWithStatusCode = responseProvider.CreateResponses(testRequest)
+		response, openAIErrorWithStatusCode = responseProvider.CreateResponses(config.RelayModeResponses, testRequest)
 	case "chat":
 		chatProvider, ok := provider.(providers_base.ChatInterface)
 		if !ok {

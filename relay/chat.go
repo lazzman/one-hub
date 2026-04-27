@@ -186,7 +186,7 @@ func (r *relayChat) compatibleSend(resProvider providersBase.ResponsesInterface)
 
 	if r.chatRequest.Stream {
 		var response requester.StreamReaderInterface[string]
-		response, err = resProvider.CreateResponsesStream(resRequest)
+		response, err = resProvider.CreateResponsesStream(config.RelayModeResponses, resRequest)
 		if err != nil {
 			return
 		}
@@ -204,7 +204,7 @@ func (r *relayChat) compatibleSend(resProvider providersBase.ResponsesInterface)
 		r.SetFirstResponseTime(firstResponseTime)
 	} else {
 		var response *types.OpenAIResponsesResponses
-		response, err = resProvider.CreateResponses(resRequest)
+		response, err = resProvider.CreateResponses(config.RelayModeResponses, resRequest)
 		if err != nil {
 			return
 		}

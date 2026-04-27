@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"one-api/common"
-	"one-api/common/config"
 	"one-api/common/requester"
 	"one-api/common/utils"
 	"one-api/types"
@@ -21,8 +20,8 @@ type OpenAIResponsesStreamHandler struct {
 	toolIndex  int
 }
 
-func (p *OpenAIProvider) CreateResponses(request *types.OpenAIResponsesRequest) (openaiResponse *types.OpenAIResponsesResponses, errWithCode *types.OpenAIErrorWithStatusCode) {
-	req, errWithCode := p.GetRequestTextBody(config.RelayModeResponses, request.Model, request)
+func (p *OpenAIProvider) CreateResponses(relayMode int, request *types.OpenAIResponsesRequest) (openaiResponse *types.OpenAIResponsesResponses, errWithCode *types.OpenAIErrorWithStatusCode) {
+	req, errWithCode := p.GetRequestTextBody(relayMode, request.Model, request)
 	if errWithCode != nil {
 		return nil, errWithCode
 	}
@@ -53,8 +52,8 @@ func (p *OpenAIProvider) CreateResponses(request *types.OpenAIResponsesRequest) 
 	return response, nil
 }
 
-func (p *OpenAIProvider) CreateResponsesStream(request *types.OpenAIResponsesRequest) (requester.StreamReaderInterface[string], *types.OpenAIErrorWithStatusCode) {
-	req, errWithCode := p.GetRequestTextBody(config.RelayModeResponses, request.Model, request)
+func (p *OpenAIProvider) CreateResponsesStream(relayMode int, request *types.OpenAIResponsesRequest) (requester.StreamReaderInterface[string], *types.OpenAIErrorWithStatusCode) {
+	req, errWithCode := p.GetRequestTextBody(relayMode, request.Model, request)
 	if errWithCode != nil {
 		return nil, errWithCode
 	}

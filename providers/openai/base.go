@@ -79,6 +79,10 @@ func getOpenAIConfig(baseURL string, channel *model.Channel) base.ProviderConfig
 		Responses:           "/v1/responses",
 	}
 
+	if channel.Type == config.ChannelTypeOpenAI {
+		providerConfig.ResponsesCompact = "/v1/responses/compact"
+	}
+
 	if channel.Type != config.ChannelTypeCustom || channel.Plugin == nil {
 		return providerConfig
 	}
@@ -89,6 +93,7 @@ func getOpenAIConfig(baseURL string, channel *model.Channel) base.ProviderConfig
 	}
 
 	providerConfig.SetAPIUri(customMapping)
+	providerConfig.ResponsesCompact = ""
 
 	return providerConfig
 }
@@ -275,7 +280,7 @@ func (p *OpenAIProvider) GetRequestTextBody(relayMode int, ModelName string, req
 		}
 
 		// 如果允许额外字段透传，从原始请求中获取额外字段
-		if p.Channel.AllowExtraBody && relayMode == config.RelayModeResponses {
+		if p.Channel.AllowExtraBody && (relayMode == config.RelayModeResponses || relayMode == config.RelayModeResponsesCompact) {
 			requestMap = p.mergeResponsesRawRequest(requestMap)
 		} else if p.Channel.AllowExtraBody {
 			requestMap = p.mergeExtraBodyFromRawRequest(requestMap)

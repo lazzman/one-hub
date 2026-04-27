@@ -61,10 +61,9 @@ func Relay(c *gin.Context) {
 
 	go processChannelRelayError(c.Request.Context(), channel.Id, channel.Name, apiErr, channel.Type)
 
-	retryTimes := config.RetryTimes
-	if done || !shouldRetry(c, apiErr, channel.Type) {
+	retryTimes := getChannelRetryTimes(c, apiErr, channel.Type, done)
+	if retryTimes == 0 {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("relay error happen, status code is %d, won't retry in this case", apiErr.StatusCode))
-		retryTimes = 0
 	}
 
 	startTime := c.GetTime("requestStartTime")

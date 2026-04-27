@@ -5,11 +5,13 @@ import (
 	"io"
 	"net/http"
 	"one-api/common"
+	"one-api/common/config"
 	"one-api/common/logger"
 	"one-api/common/requester"
 	providersBase "one-api/providers/base"
 	"one-api/relay/relay_util"
 	"one-api/types"
+	"strings"
 	"time"
 
 	"github.com/bytedance/gopkg/util/gopool"
@@ -19,12 +21,78 @@ import (
 type relayResponses struct {
 	relayBase
 	responsesRequest types.OpenAIResponsesRequest
+	relayMode        int
 }
 
 func NewRelayResponses(c *gin.Context) *relayResponses {
-	relay := &relayResponses{}
+	relay := &relayResponses{
+		relayMode: getResponsesRelayMode(c.Request.URL.Path),
+	}
 	relay.c = c
+	if relay.isCompact() {
+		c.Set("allow_channel_type", []int{config.ChannelTypeOpenAI})
+	}
 	return relay
+}
+
+func getResponsesRelayMode(path string) int {
+	if strings.HasSuffix(path, "/compact") {
+		return config.RelayModeResponsesCompact
+	}
+	return config.RelayModeResponses
+}
+
+func (r *relayResponses) isCompact() bool {
+	return r.relayMode == config.RelayModeResponsesCompact
+}
+
+const responsesCompactUnsupportedMessage = "The responses compact API interface is not supported"
+
+func unsupportedResponsesCompactError() *types.OpenAIErrorWithStatusCode {
+	return common.StringErrorWrapperLocal(responsesCompactUnsupportedMessage, "unsupported_api", http.StatusNotImplemented)
+}
+
+func isRetryableResponsesCompactUnsupportedError(apiErr *types.OpenAIErrorWithStatusCode) bool {
+	if apiErr == nil {
+		return false
+	}
+
+	return apiErr.LocalError &&
+		apiErr.StatusCode == http.StatusNotImplemented &&
+		apiErr.Code == "unsupported_api" &&
+		apiErr.Message == responsesCompactUnsupportedMessage
+}
+
+func normalizeResponsesCompactError(apiErr *types.OpenAIErrorWithStatusCode) *types.OpenAIErrorWithStatusCode {
+	if apiErr == nil {
+		return nil
+	}
+
+	if isRetryableResponsesCompactUnsupportedError(apiErr) {
+		return unsupportedResponsesCompactError()
+	}
+
+	if apiErr.LocalError {
+		return apiErr
+	}
+
+	if apiErr.StatusCode == http.StatusNotFound {
+		return unsupportedResponsesCompactError()
+	}
+
+	if apiErr.StatusCode != http.StatusBadRequest {
+		return apiErr
+	}
+
+	message := strings.ToLower(apiErr.Message)
+	if strings.Contains(message, "/responses/compact") &&
+		(strings.Contains(message, "invalid url") ||
+			strings.Contains(message, "not found") ||
+			strings.Contains(message, "unsupported")) {
+		return unsupportedResponsesCompactError()
+	}
+
+	return apiErr
 }
 
 func (r *relayResponses) setRequest() error {
@@ -54,6 +122,32 @@ func (r *relayResponses) send() (err *types.OpenAIErrorWithStatusCode, done bool
 	r.responsesRequest.Model = r.modelName
 	channel := r.provider.GetChannel()
 	responsesProvider, ok := r.provider.(providersBase.ResponsesInterface)
+	if r.isCompact() {
+		if r.responsesRequest.Stream {
+			err = common.StringErrorWrapperLocal("The responses compact API does not support stream=true", "invalid_request", http.StatusBadRequest)
+			done = true
+			return
+		}
+		if channel.Type != config.ChannelTypeOpenAI || !ok || channel.CompatibleResponse || !r.provider.GetSupportedResponse() {
+			err = unsupportedResponsesCompactError()
+			return
+		}
+
+		var response *types.OpenAIResponsesResponses
+		response, err = responsesProvider.CreateResponses(r.relayMode, &r.responsesRequest)
+		if err != nil {
+			err = normalizeResponsesCompactError(err)
+			done = !isRetryableResponsesCompactUnsupportedError(err)
+			return
+		}
+		openErr := responseJsonClient(r.c, response)
+		if openErr != nil {
+			err = openErr
+			done = true
+		}
+		return
+	}
+
 	if !ok || channel.CompatibleResponse || !r.provider.GetSupportedResponse() {
 		// 做一层Chat的兼容
 		chatProvider, ok := r.provider.(providersBase.ChatInterface)
@@ -68,7 +162,7 @@ func (r *relayResponses) send() (err *types.OpenAIErrorWithStatusCode, done bool
 
 	if r.responsesRequest.Stream {
 		var response requester.StreamReaderInterface[string]
-		response, err = responsesProvider.CreateResponsesStream(&r.responsesRequest)
+		response, err = responsesProvider.CreateResponsesStream(r.relayMode, &r.responsesRequest)
 		if err != nil {
 			return
 		}
@@ -81,7 +175,7 @@ func (r *relayResponses) send() (err *types.OpenAIErrorWithStatusCode, done bool
 		r.SetFirstResponseTime(firstResponseTime)
 	} else {
 		var response *types.OpenAIResponsesResponses
-		response, err = responsesProvider.CreateResponses(&r.responsesRequest)
+		response, err = responsesProvider.CreateResponses(r.relayMode, &r.responsesRequest)
 		if err != nil {
 			return
 		}
